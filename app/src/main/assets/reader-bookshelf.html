@@ -1005,6 +1005,11 @@
     // 手机上默认单页居中，左右留白可点击翻页
     let currentLayoutMode = localStorage.getItem('layoutMode') ||
       (IS_NATIVE && window.innerWidth > window.innerHeight ? 'double' : 'single');
+    // 恢复进度保护：恢复期间禁止把"第一章/回退页"等临时位置写进进度，防止覆盖真实进度
+    let restoringProgress = false;
+    // 打开书时读到的记录章节（用于遮罩消失后的章节提示，避免误显示"第一章"）
+    let pendingRestoreTitle = null;
+    let pendingRestoreIndex = null;
 
     // 初始化 IndexedDB（原生环境下书籍走内部存储，跳过 IndexedDB）
     function initDB() {
@@ -1217,7 +1222,7 @@
       const app = document.getElementById('app');
       app.innerHTML = `
             <div class="welcome">
-              <h1>📚 我的书架 <span style="font-size:0.55em;opacity:0.55;font-weight:400">v1.0.4</span></h1>
+              <h1>📚 我的书架 <span style="font-size:0.55em;opacity:0.55;font-weight:400">v1.0.5</span></h1>
               <p>选择一本书继续阅读</p>
               <div class="bookshelf" id="bookshelf"></div>
               <input type="file" id="fileInput" accept=".epub" style="display: none;">
@@ -1320,6 +1325,10 @@
         const vOld = document.getElementById('viewer');
         if (vOld) vOld.innerHTML = '';
         currentBookFile = fileName;
+        // 重置恢复进度保护（防止上次未完成的恢复遗留状态影响本次）
+        restoringProgress = false;
+        pendingRestoreTitle = null;
+        pendingRestoreIndex = null;
         showLoading();
 
         const bookData = await getEPUBFromDB(fileName);
@@ -1554,13 +1563,34 @@
         if (currentBookFile) {
           const progress = getReadingProgress(currentBookFile);
           if (progress && progress.cfi) {
+            // 记录待恢复章节，用于遮罩消失后的章节提示（避免误显示"第一章"）
+            pendingRestoreTitle = progress.chapterTitle || null;
+            pendingRestoreIndex = (progress.chapterIndex != null) ? progress.chapterIndex : null;
+            const restoreBookFile = currentBookFile;
+            const restoreRendition = rendition;
             // 分页未就绪时重试定位，确保回到上次阅读页
             setTimeout(() => {
-              restoreProgress(progress.cfi, progress.chapterIndex, () => {
+              // 已切书：放弃本次恢复，避免旧书进度干扰新书
+              if (!rendition || rendition !== restoreRendition || currentBookFile !== restoreBookFile) return;
+              restoringProgress = true; // 恢复期间禁止把临时位置写进进度
+              let settled = false;
+              const finishRestore = (moved) => {
+                if (settled) return;
+                settled = true;
+                if (!rendition || rendition !== restoreRendition || currentBookFile !== restoreBookFile) return;
+                restoringProgress = false;
                 const ci = getCurrentChapterIndex();
                 updateActiveTocItem(ci);
-                updateChapterInfo(ci);
-              });
+                // 只有确实回到记录章节才保存进度；失败时保留原进度，下次再恢复
+                if (moved || progress.chapterIndex == null || ci === progress.chapterIndex) {
+                  updateChapterInfo(ci);
+                } else {
+                  updateChapterInfo(ci, null, true); // 仅同步章节名/页码 UI，不覆盖进度
+                }
+              };
+              restoreProgress(progress.cfi, progress.chapterIndex, finishRestore);
+              // 看门狗：极端情况下定位卡死也要释放进度保护，避免后续翻页不再保存
+              setTimeout(() => finishRestore(false), 10000);
             }, 500);
           } else if (progress && tocItems[progress.chapterIndex]) {
             // 旧版进度（仅章节），跳到章节开头
@@ -1735,7 +1765,7 @@
       return 0;
     }
 
-    function updateChapterInfo(index, cfi) {
+    function updateChapterInfo(index, cfi, noSave) {
       currentChapterIndex = index;
       if (tocItems[index]) {
         currentChapterTitle = tocItems[index].title;
@@ -1757,7 +1787,9 @@
           total = start.displayed.total;
         }
       } catch (e) { /* 忽略 */ }
-      if (currentBookFile) {
+      if (currentBookFile && !noSave) {
+        // 恢复进度期间：不写入临时/未就绪的位置，防止把"第一章"覆盖进真实进度
+        if (restoringProgress) return;
         // 节流保存进度：翻页时 localStorage 写会阻塞主线程，至少间隔 1.5s 存一次
         const now = Date.now();
         if (!updateChapterInfo._lastSave || now - updateChapterInfo._lastSave > 1500) {
@@ -1893,40 +1925,41 @@
       l.style.opacity = '0';
       setTimeout(() => { l.style.display = 'none'; l.style.opacity = ''; }, 180);
     }
-    // 恢复阅读位置：CFI 定位失败时回退到章节开头，至少回到正确章节
+    // 恢复阅读位置：CFI 定位失败时回退到章节开头，至少回到正确章节。
+    // 恢复期间绝不写入"未就绪/回退"位置（进度是否保存由 onDone 按实际落点决定）。
+    // onDone(moved)：moved=true 表示确实回到了记录位置/章节，可以保存进度。
     function restoreProgress(cfi, chapterIndex, onDone, attempts) {
       attempts = attempts || 0;
+      if (!rendition) { onDone(false); return; }
       var fallback = function() {
-        if (chapterIndex != null) {
-          rendition.display(chapterIndex).then(function() {
-            var ci = getCurrentChapterIndex();
-            updateActiveTocItem(ci);
-            updateChapterInfo(ci);
-            onDone();
-          }).catch(function() { onDone(); });
-        } else {
-          onDone();
-        }
+        if (chapterIndex == null) { onDone(false); return; }
+        rendition.display(chapterIndex).then(function() {
+          var ci = getCurrentChapterIndex();
+          updateActiveTocItem(ci);
+          onDone(ci === chapterIndex);
+        }).catch(function() { onDone(false); });
       };
       var doFinal = function() {
         // 等字体/分页稳定后重新定位，避免页码错乱（章节对但页偏）
         setTimeout(function() {
-          rendition.display(cfi).then(function() { onDone(); }).catch(function() { onDone(); });
+          if (!rendition) { onDone(false); return; }
+          rendition.display(cfi).then(function() { onDone(true); }).catch(function() { onDone(true); });
         }, 300);
       };
       rendition.display(cfi).then(function() {
         var loc = rendition.currentLocation();
         var cur = loc && loc.start ? loc.start.cfi : '';
         var moved = cfi && cur && cur.indexOf(cfi.substring(0, 20)) >= 0;
-        if (!moved && attempts < 3) {
-          setTimeout(function() { restoreProgress(cfi, chapterIndex, onDone, attempts + 1); }, 350);
+        if (!moved && attempts < 8) {
+          // 分页/定位未就绪：延迟重试（慢书分页需数秒），期间不保存任何位置
+          setTimeout(function() { restoreProgress(cfi, chapterIndex, onDone, attempts + 1); }, 500);
         } else if (!moved) {
           fallback();
         } else {
           doFinal();
         }
       }).catch(function() {
-        if (attempts < 3) setTimeout(function() { restoreProgress(cfi, chapterIndex, onDone, attempts + 1); }, 350);
+        if (attempts < 8) setTimeout(function() { restoreProgress(cfi, chapterIndex, onDone, attempts + 1); }, 500);
         else fallback();
       });
     }
@@ -1957,7 +1990,15 @@
       bookTitleShowing = true;
       const ci = getCurrentChapterIndex();
       lastBannerChapter = ci; // 记录当前章，避免翻页重复提示章节名
-      if (tocItems[ci]) showChapterBanner(tocItems[ci].title);
+      let bannerTitle = tocItems[ci] ? tocItems[ci].title : '';
+      // 恢复进度场景：此刻还显示在第一章，用记录的章节名提示，避免误显示"第一章"
+      if (ci === 0 && pendingRestoreTitle && pendingRestoreIndex > 0) {
+        bannerTitle = pendingRestoreTitle;
+        lastBannerChapter = pendingRestoreIndex;
+      }
+      if (bannerTitle) showChapterBanner(bannerTitle);
+      pendingRestoreTitle = null;
+      pendingRestoreIndex = null;
       setTimeout(() => { bookTitleShowing = false; }, 1600);
     }
 
@@ -2417,6 +2458,10 @@
 
       try {
         currentBookFile = file.name;
+        // 重置恢复进度保护（防止上次未完成的恢复遗留状态影响本次）
+        restoringProgress = false;
+        pendingRestoreTitle = null;
+        pendingRestoreIndex = null;
         showLoading();
 
         if (typeof ePub === 'undefined') {
@@ -2655,13 +2700,34 @@
         if (currentBookFile) {
           const progress = getReadingProgress(currentBookFile);
           if (progress && progress.cfi) {
+            // 记录待恢复章节，用于遮罩消失后的章节提示（避免误显示"第一章"）
+            pendingRestoreTitle = progress.chapterTitle || null;
+            pendingRestoreIndex = (progress.chapterIndex != null) ? progress.chapterIndex : null;
+            const restoreBookFile = currentBookFile;
+            const restoreRendition = rendition;
             // 分页未就绪时重试定位，确保回到上次阅读页
             setTimeout(() => {
-              restoreProgress(progress.cfi, progress.chapterIndex, () => {
+              // 已切书：放弃本次恢复，避免旧书进度干扰新书
+              if (!rendition || rendition !== restoreRendition || currentBookFile !== restoreBookFile) return;
+              restoringProgress = true; // 恢复期间禁止把临时位置写进进度
+              let settled = false;
+              const finishRestore = (moved) => {
+                if (settled) return;
+                settled = true;
+                if (!rendition || rendition !== restoreRendition || currentBookFile !== restoreBookFile) return;
+                restoringProgress = false;
                 const ci = getCurrentChapterIndex();
                 updateActiveTocItem(ci);
-                updateChapterInfo(ci);
-              });
+                // 只有确实回到记录章节才保存进度；失败时保留原进度，下次再恢复
+                if (moved || progress.chapterIndex == null || ci === progress.chapterIndex) {
+                  updateChapterInfo(ci);
+                } else {
+                  updateChapterInfo(ci, null, true); // 仅同步章节名/页码 UI，不覆盖进度
+                }
+              };
+              restoreProgress(progress.cfi, progress.chapterIndex, finishRestore);
+              // 看门狗：极端情况下定位卡死也要释放进度保护，避免后续翻页不再保存
+              setTimeout(() => finishRestore(false), 10000);
             }, 500);
           } else if (progress && tocItems[progress.chapterIndex]) {
             // 旧版进度（仅章节），跳到章节开头
