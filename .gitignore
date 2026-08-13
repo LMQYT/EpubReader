@@ -1,0 +1,16 @@
+*.iml
+*.apk
+# 私有 epub 不传，仅公共领域示例书 sample.epub 上传
+*.epub
+!sample.epub
+.gradle/
+.kotlin/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+# 个人工作日志（含本地路径），不上传
+work-logs/

@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 打开的书：左右两页 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,34 C44,36 38,37 32,37 L32,72 C38,72 44,71 50,69 L50,34 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M58,34 C64,36 70,37 76,37 L76,72 C70,72 64,71 58,69 L58,34 Z" />
+</vector>
