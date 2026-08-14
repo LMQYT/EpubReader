@@ -1222,7 +1222,7 @@
       const app = document.getElementById('app');
       app.innerHTML = `
             <div class="welcome">
-              <h1>📚 我的书架 <span style="font-size:0.55em;opacity:0.55;font-weight:400">v1.0.5</span></h1>
+              <h1>📚 我的书架 <span style="font-size:0.55em;opacity:0.55;font-weight:400">v1.0.6</span></h1>
               <p>选择一本书继续阅读</p>
               <div class="bookshelf" id="bookshelf"></div>
               <input type="file" id="fileInput" accept=".epub" style="display: none;">
@@ -1568,11 +1568,17 @@
             pendingRestoreIndex = (progress.chapterIndex != null) ? progress.chapterIndex : null;
             const restoreBookFile = currentBookFile;
             const restoreRendition = rendition;
+            // 立即开守卫：rendition.display() 之后的重排 relocated/displayed 事件（ResizeObserver/字号/主题/行距）
+            // 会在恢复开始前把"第一章第1页"写进 localStorage 覆盖真实进度，而恢复完成后的回写又可能被 1.5s 节流挡住
+            // → 必须在 display() 刚完成时就禁止保存，直到恢复落定（修复"再进书回到初始位置"）
+            restoringProgress = true;
             // 分页未就绪时重试定位，确保回到上次阅读页
             setTimeout(() => {
-              // 已切书：放弃本次恢复，避免旧书进度干扰新书
-              if (!rendition || rendition !== restoreRendition || currentBookFile !== restoreBookFile) return;
-              restoringProgress = true; // 恢复期间禁止把临时位置写进进度
+              // 已切书：放弃本次恢复，避免旧书进度干扰新书，同时释放守卫防止新书进度无法保存
+              if (!rendition || rendition !== restoreRendition || currentBookFile !== restoreBookFile) {
+                restoringProgress = false;
+                return;
+              }
               let settled = false;
               const finishRestore = (moved) => {
                 if (settled) return;
@@ -1583,7 +1589,7 @@
                 updateActiveTocItem(ci);
                 // 只有确实回到记录章节才保存进度；失败时保留原进度，下次再恢复
                 if (moved || progress.chapterIndex == null || ci === progress.chapterIndex) {
-                  updateChapterInfo(ci);
+                  updateChapterInfo(ci, null, false, true); // forceSave：恢复完成必然落盘正确位置，不被节流挡住
                 } else {
                   updateChapterInfo(ci, null, true); // 仅同步章节名/页码 UI，不覆盖进度
                 }
@@ -1593,9 +1599,23 @@
               setTimeout(() => finishRestore(false), 10000);
             }, 500);
           } else if (progress && tocItems[progress.chapterIndex]) {
-            // 旧版进度（仅章节），跳到章节开头
+            // 旧版进度（仅章节），跳到章节开头（同样先开守卫，防初始 relocated 把第一章写进进度）
+            restoringProgress = true;
             setTimeout(() => {
+              if (!rendition) { restoringProgress = false; return; }
               navigateToToc(tocItems[progress.chapterIndex], progress.chapterIndex);
+              // 跳转完成后释放守卫；已到记录章节才落盘，仍停在一章则保留原进度下次再恢复
+              setTimeout(() => {
+                if (!rendition) return;
+                restoringProgress = false;
+                const ci = getCurrentChapterIndex();
+                updateActiveTocItem(ci);
+                if (ci === progress.chapterIndex) {
+                  updateChapterInfo(ci, null, false, true);
+                } else {
+                  updateChapterInfo(ci, null, true);
+                }
+              }, 600);
             }, 500);
           } else {
             updateChapterInfo(0);
@@ -1765,7 +1785,7 @@
       return 0;
     }
 
-    function updateChapterInfo(index, cfi, noSave) {
+    function updateChapterInfo(index, cfi, noSave, forceSave) {
       currentChapterIndex = index;
       if (tocItems[index]) {
         currentChapterTitle = tocItems[index].title;
@@ -1790,9 +1810,9 @@
       if (currentBookFile && !noSave) {
         // 恢复进度期间：不写入临时/未就绪的位置，防止把"第一章"覆盖进真实进度
         if (restoringProgress) return;
-        // 节流保存进度：翻页时 localStorage 写会阻塞主线程，至少间隔 1.5s 存一次
+        // 节流保存进度：翻页时 localStorage 写会阻塞主线程，至少间隔 1.5s 存一次（forceSave 跳过节流，用于恢复完成后的落盘）
         const now = Date.now();
-        if (!updateChapterInfo._lastSave || now - updateChapterInfo._lastSave > 1500) {
+        if (forceSave || !updateChapterInfo._lastSave || now - updateChapterInfo._lastSave > 1500) {
           updateChapterInfo._lastSave = now;
           saveReadingProgress(currentBookFile, index, currentChapterTitle, cfi || getCurrentCfi(), page, total);
         }
@@ -2705,11 +2725,17 @@
             pendingRestoreIndex = (progress.chapterIndex != null) ? progress.chapterIndex : null;
             const restoreBookFile = currentBookFile;
             const restoreRendition = rendition;
+            // 立即开守卫：rendition.display() 之后的重排 relocated/displayed 事件（ResizeObserver/字号/主题/行距）
+            // 会在恢复开始前把"第一章第1页"写进 localStorage 覆盖真实进度，而恢复完成后的回写又可能被 1.5s 节流挡住
+            // → 必须在 display() 刚完成时就禁止保存，直到恢复落定（修复"再进书回到初始位置"）
+            restoringProgress = true;
             // 分页未就绪时重试定位，确保回到上次阅读页
             setTimeout(() => {
-              // 已切书：放弃本次恢复，避免旧书进度干扰新书
-              if (!rendition || rendition !== restoreRendition || currentBookFile !== restoreBookFile) return;
-              restoringProgress = true; // 恢复期间禁止把临时位置写进进度
+              // 已切书：放弃本次恢复，避免旧书进度干扰新书，同时释放守卫防止新书进度无法保存
+              if (!rendition || rendition !== restoreRendition || currentBookFile !== restoreBookFile) {
+                restoringProgress = false;
+                return;
+              }
               let settled = false;
               const finishRestore = (moved) => {
                 if (settled) return;
@@ -2720,7 +2746,7 @@
                 updateActiveTocItem(ci);
                 // 只有确实回到记录章节才保存进度；失败时保留原进度，下次再恢复
                 if (moved || progress.chapterIndex == null || ci === progress.chapterIndex) {
-                  updateChapterInfo(ci);
+                  updateChapterInfo(ci, null, false, true); // forceSave：恢复完成必然落盘正确位置，不被节流挡住
                 } else {
                   updateChapterInfo(ci, null, true); // 仅同步章节名/页码 UI，不覆盖进度
                 }
@@ -2730,9 +2756,23 @@
               setTimeout(() => finishRestore(false), 10000);
             }, 500);
           } else if (progress && tocItems[progress.chapterIndex]) {
-            // 旧版进度（仅章节），跳到章节开头
+            // 旧版进度（仅章节），跳到章节开头（同样先开守卫，防初始 relocated 把第一章写进进度）
+            restoringProgress = true;
             setTimeout(() => {
+              if (!rendition) { restoringProgress = false; return; }
               navigateToToc(tocItems[progress.chapterIndex], progress.chapterIndex);
+              // 跳转完成后释放守卫；已到记录章节才落盘，仍停在一章则保留原进度下次再恢复
+              setTimeout(() => {
+                if (!rendition) return;
+                restoringProgress = false;
+                const ci = getCurrentChapterIndex();
+                updateActiveTocItem(ci);
+                if (ci === progress.chapterIndex) {
+                  updateChapterInfo(ci, null, false, true);
+                } else {
+                  updateChapterInfo(ci, null, true);
+                }
+              }, 600);
             }, 500);
           } else {
             updateChapterInfo(0);
