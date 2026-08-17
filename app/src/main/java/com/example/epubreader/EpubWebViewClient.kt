@@ -17,12 +17,15 @@ import java.io.FileInputStream
 class EpubWebViewClient(
     context: Context,
     private val store: EpubStore,
+    private val onPageLoaded: () -> Unit = {},
 ) : WebViewClient() {
 
     private val assetLoader: WebViewAssetLoader = WebViewAssetLoader.Builder()
         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
         .addPathHandler("/epubs/", EpubPathHandler(store))
         .build()
+
+    private var loadedOnce = false
 
     override fun shouldInterceptRequest(
         view: WebView,
@@ -34,6 +37,14 @@ class EpubWebViewClient(
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         // 所有链接（阅读器内部 + 自定义 http/https 网页）都留在本 WebView
         return false
+    }
+
+    override fun onPageFinished(view: WebView, url: String) {
+        // 首载完成触发一次（WebDAV 自动同步等），避免重建书架等后续加载重复触发
+        if (!loadedOnce) {
+            loadedOnce = true
+            onPageLoaded()
+        }
     }
 
     private class EpubPathHandler(

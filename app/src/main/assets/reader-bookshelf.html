@@ -441,6 +441,9 @@
     .shelf-btn.manage { background: #ececec; color: #555; }
     body.dark-mode .shelf-btn.manage { background: #333; color: #ddd; }
     .shelf-btn.manage.active { background: #e74c3c; color: white; }
+    /* WebDAV 同步按钮：仅安卓 App（native-mode）显示，桌面网页版隐藏 */
+    .shelf-btn.native-only { display: none; }
+    body.native-mode .shelf-btn.native-only { display: block; }
     .welcome { padding-bottom: 90px; }
 
     /* 底部进度条 */
@@ -904,13 +907,14 @@
 <body class="light-mode bg-white">
   <div class="app" id="app">
     <div class="welcome">
-      <h1>📚 我的书架 <span style="font-size:0.55em;opacity:0.55;font-weight:400">v1.0.4</span></h1>
+      <h1>📚 我的书架 <span class="app-version" style="font-size:0.55em;opacity:0.55;font-weight:400"></span></h1>
       <p>选择一本书继续阅读</p>
       <div class="bookshelf" id="bookshelf"></div>
       <input type="file" id="fileInput" accept=".epub" style="display: none;">
     </div>
     <div class="shelf-bar">
       <button class="shelf-btn" onclick="selectFile()">📂 打开EPUB</button>
+      <button class="shelf-btn manage native-only" id="webdavBtn" onclick="window.AndroidBridge && window.AndroidBridge.openWebDavConfig()">☁️ 云同步</button>
       <button class="shelf-btn manage" id="manageBtn" onclick="toggleManageMode()">🗑 删除</button>
     </div>
   </div>
@@ -943,6 +947,76 @@
     function notifyState(s) {
       if (IS_NATIVE) { try { window.AndroidBridge.notifyState(s); } catch (e) {} }
     }
+    // 书架标题版本号动态显示真实 App 版本（从原生桥读），避免硬编码版本号过期
+    function applyAppVersion() {
+      if (IS_NATIVE && window.AndroidBridge.getAppVersion) {
+        const v = window.AndroidBridge.getAppVersion();
+        document.querySelectorAll('.app-version').forEach(el => { el.textContent = 'v' + v; });
+      }
+    }
+    applyAppVersion();
+    // 云同步按钮显示当前启用的配置名（如「☁️ 坚果云」），未启用显示「☁️ 云同步」
+    window.applyWebDavButtonName = function () {
+      if (IS_NATIVE && window.AndroidBridge.getSyncStatus) {
+        try {
+          const s = JSON.parse(window.AndroidBridge.getSyncStatus());
+          const label = (s.configured && s.name) ? '☁️ ' + s.name : '☁️ 云同步';
+          document.querySelectorAll('#webdavBtn').forEach(el => { el.textContent = label; });
+        } catch (e) {}
+      }
+    }
+    applyWebDavButtonName();
+
+    // ===== WebDAV 云同步支持 =====
+    // 收集本地所有进度/元数据/最近打开，返回对象（原生经 evaluateJavascript 拿到 JSON）
+    window.collectSyncData = function () {
+      const data = { progress: {}, meta: {}, lastOpened: {}, ts: Date.now() };
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k.indexOf('epub_progress_') === 0) data.progress[k] = localStorage.getItem(k);
+        else if (k.indexOf('epub_meta_') === 0) data.meta[k] = localStorage.getItem(k);
+        else if (k.indexOf('lastOpened_') === 0) data.lastOpened[k] = localStorage.getItem(k);
+      }
+      return data;
+    };
+
+    // 应用云端进度：overwrite=true（云端下载）无条件覆盖；false（自动同步）仅写本地缺失的 key
+    window.applySyncData = function (json, overwrite) {
+      try {
+        const remote = typeof json === 'string' ? JSON.parse(json) : json;
+        if (!remote) return;
+        const apply = (obj) => {
+          if (!obj) return;
+          for (const k in obj) {
+            if (overwrite || localStorage.getItem(k) === null) {
+              try { localStorage.setItem(k, obj[k]); } catch (e) {}
+            }
+          }
+        };
+        apply(remote.progress);
+        apply(remote.meta);
+        apply(remote.lastOpened);
+      } catch (e) { /* 忽略损坏数据 */ }
+      // 刷新书架显示（含卡片上的进度）
+      if (document.getElementById('bookshelf')) showBookshelf();
+    };
+
+    // 原生同步完成后的顶部提示
+    window.notifySyncResult = function (json) {
+      try {
+        const r = typeof json === 'string' ? JSON.parse(json) : json;
+        let msg;
+        if (r.error) msg = '☁️ ' + r.error;
+        else if (r.uploaded > 0 || r.downloaded > 0) msg = '☁️ 同步完成：上传 ' + r.uploaded + ' · 下载 ' + r.downloaded;
+        else msg = '☁️ 同步完成：已是最新';
+        if (typeof showChapterBanner === 'function') showChapterBanner(msg);
+      } catch (e) {}
+    };
+
+    // 同步后刷新书架（可能新增/覆盖了书）
+    window.refreshShelfFromSync = function () {
+      if (document.getElementById('bookshelf')) showBookshelf();
+    };
     // 手机上无鼠标悬停：让书架卡片的删除按钮常显
     // 沉浸模式：顶部工具栏/底部控制栏默认隐藏，点屏幕中间唤出（由 App 层调用 toggleChrome）
     if (IS_NATIVE) {
@@ -1222,15 +1296,18 @@
       const app = document.getElementById('app');
       app.innerHTML = `
             <div class="welcome">
-              <h1>📚 我的书架 <span style="font-size:0.55em;opacity:0.55;font-weight:400">v1.0.6</span></h1>
+              <h1>📚 我的书架 <span class="app-version" style="font-size:0.55em;opacity:0.55;font-weight:400"></span></h1>
               <p>选择一本书继续阅读</p>
               <div class="bookshelf" id="bookshelf"></div>
               <input type="file" id="fileInput" accept=".epub" style="display: none;">
             </div>
             <div class="shelf-bar">
               <button class="shelf-btn" onclick="selectFile()">📂 打开EPUB</button>
+              <button class="shelf-btn manage native-only" id="webdavBtn" onclick="window.AndroidBridge && window.AndroidBridge.openWebDavConfig()">☁️ 云同步</button>
               <button class="shelf-btn manage" id="manageBtn" onclick="toggleManageMode()">🗑 删除</button>
             </div>`;
+      applyAppVersion(); // 重建书架模板后重新填充版本号
+      applyWebDavButtonName(); // 云同步按钮显示启用配置名
     }
 
     // 显示书架
@@ -1314,6 +1391,8 @@
         bookshelf.appendChild(card);
       }
       notifyState('shelf');
+      // 每次显示书架都刷新云同步按钮上的启用配置名（切换配置后即时生效）
+      applyWebDavButtonName();
     }
 
     // 从书架打开书籍
@@ -1684,13 +1763,29 @@
       }
     }
 
-    // 从书架删除书籍
-    async function deleteBookFromShelf(fileName) {
+    // 从书架删除书籍（原生：弹原生对话框，是否同时删云端由用户选；网页版：confirm）
+    function deleteBookFromShelf(fileName) {
+      if (IS_NATIVE) {
+        window.AndroidBridge.deleteBookFromShelf(fileName);
+        return;
+      }
       if (confirm(`确定要删除 "${fileName}" 吗？`)) {
-        await deleteBook(fileName);
-        showBookshelf();
+        deleteBook(fileName).then(showBookshelf);
       }
     }
+
+    // 原生删除完成后回调：清理 localStorage 进度/封面并刷新书架
+    window.handleBookDeleted = function (json) {
+      try {
+        const r = typeof json === 'string' ? JSON.parse(json) : json;
+        const name = r && r.name;
+        if (name) {
+          localStorage.removeItem('epub_meta_' + name);
+          localStorage.removeItem('epub_progress_' + name);
+        }
+      } catch (e) {}
+      if (document.getElementById('bookshelf')) showBookshelf();
+    };
 
     // 从 localStorage 恢复设置
     function loadSettings() {

@@ -18,6 +18,10 @@ class EpubStore(private val context: Context) {
     private val dir: File
         get() = File(context.filesDir, "epubs").also { it.mkdirs() }
 
+    /** 同步临时目录（下载中转/进度文件），用完即删 */
+    val tempDir: File
+        get() = File(context.filesDir, "webdav_tmp").also { it.mkdirs() }
+
     /** 清理非法字符、限长、保证 .epub 后缀、重名去重 */
     fun sanitizeFileName(raw: String): String {
         var name = raw.replace(Regex("""[\\/:*?"<>|\x00-\x1f]"""), "_").trim()
@@ -66,6 +70,20 @@ class EpubStore(private val context: Context) {
             ?.sortedByDescending { it.lastModified() }
             ?.map { EpubFileInfo(it.name, it.length(), it.lastModified()) }
             ?: emptyList()
+    }
+
+    /**
+     * 写入同步下载的书籍：文件名安全化但**保留原名不重命名**（覆盖同名文件），
+     * 用于云端下载覆盖本地。流式写入，不整包进内存。
+     */
+    fun saveDownloaded(raw: String, input: java.io.InputStream): EpubFileInfo {
+        var name = raw.replace(Regex("""[\\/:*?"<>|\x00-\x1f]"""), "_").trim()
+        if (name.isEmpty()) name = "book"
+        if (!name.endsWith(".epub", ignoreCase = true)) name += ".epub"
+        if (name.length > 100) name = name.take(90) + ".epub"
+        val dest = File(dir, name)
+        input.use { src -> FileOutputStream(dest).use { dst -> src.copyTo(dst, 8192) } }
+        return EpubFileInfo(name, dest.length(), dest.lastModified())
     }
 
     fun delete(name: String): Boolean {

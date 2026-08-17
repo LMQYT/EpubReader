@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/webdav_bg"
+    android:fillViewport="true"
+    android:scrollbars="none">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="☁️ WebDAV 云同步"
+            android:textColor="#1a1a1a"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="可保存多份服务器配置（如坚果云、飞牛），点选哪个就启用哪个"
+            android:textColor="#666666"
+            android:textSize="13sp" />
+
+        <!-- 配置列表（单选启用） -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="已保存的服务器（点选启用）"
+            android:textColor="#1a1a1a"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/rgConfigs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp" />
+
+        <TextView
+            android:id="@+id/tvEmptyConfig"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="还没有配置，点下方「新建配置」添加第一台服务器"
+            android:textColor="#999999"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnNew"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="＋ 新建配置"
+            android:backgroundTint="#4a4a4a"
+            android:textColor="#ffffff" />
+
+        <!-- 配置详情（当前选中/新建） -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="配置详情"
+            android:textColor="#1a1a1a"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/etName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:hint="服务器名称（如：坚果云 / 飞牛）"
+            android:inputType="text"
+            android:textColor="#1a1a1a"
+            android:textColorHint="#999999"
+            android:background="@android:drawable/editbox_background" />
+
+        <EditText
+            android:id="@+id/etUrl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="https://dav.jianguoyun.com/dav/ 或 http://192.168.1.10:5005/dav/"
+            android:inputType="textUri"
+            android:textColor="#1a1a1a"
+            android:textColorHint="#999999"
+            android:background="@android:drawable/editbox_background" />
+
+        <EditText
+            android:id="@+id/etUser"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="坚果云填邮箱 / 飞牛填 NAS 账号"
+            android:inputType="text"
+            android:textColor="#1a1a1a"
+            android:textColorHint="#999999"
+            android:background="@android:drawable/editbox_background" />
+
+        <EditText
+            android:id="@+id/etPass"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="坚果云填「应用密码」/ 飞牛填登录密码"
+            android:inputType="textPassword"
+            android:textColor="#1a1a1a"
+            android:textColorHint="#999999"
+            android:background="@android:drawable/editbox_background" />
+
+        <Switch
+            android:id="@+id/swAuto"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="打开 App 时自动同步"
+            android:textColor="#1a1a1a" />
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="💾 保存此配置"
+            android:backgroundTint="#2e7d32"
+            android:textColor="#ffffff" />
+
+        <!-- 操作 -->
+        <Button
+            android:id="@+id/btnDelete"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="🗑 删除该配置"
+            android:backgroundTint="#b00020"
+            android:textColor="#ffffff" />
+
+        <Button
+            android:id="@+id/btnTest"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="测试连接（当前表单）"
+            android:backgroundTint="#667eea"
+            android:textColor="#ffffff" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnUpload"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="⬆ 覆盖上传"
+                android:backgroundTint="#4a4a4a"
+                android:textColor="#ffffff" />
+
+            <Space
+                android:layout_width="8dp"
+                android:layout_height="1dp" />
+
+            <Button
+                android:id="@+id/btnDownload"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="⬇ 云端下载"
+                android:backgroundTint="#4a4a4a"
+                android:textColor="#ffffff" />
+        </LinearLayout>
+
+        <!-- 状态行 -->
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text=""
+            android:textColor="#333333"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnBack"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="返回书架"
+            android:backgroundTint="#667eea"
+            android:textColor="#ffffff" />
+
+        <!-- 说明 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="说明：\n· 可保存多份配置：先「新建配置」填好名称/地址/账号/密码再保存，然后点选启用那一份\n· 坚果云 WebDAV 地址 https://dav.jianguoyun.com/dav/，密码需在坚果云网页「安全」里生成「应用密码」，不是登录密码\n· 飞牛 OS 内置 WebDAV：地址 http://NAS的IP:5005/dav/，用 NAS 账号密码登录\n· 云端会自动创建 EpubReader 文件夹存放书籍和进度\n· 覆盖上传 = 把本地新书/有变化的书传上云端（未变化的自动跳过，不重复上传）\n· 云端下载 = 把云端新书/有变化的书下到本地（未变化的自动跳过）\n· 同步在此页就地执行，完成后显示结果，不会跳回书架"
+            android:textColor="#666666"
+            android:textSize="12sp"
+            android:lineSpacingExtra="4dp" />
+
+    </LinearLayout>
+</ScrollView>

@@ -6,4 +6,12 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <!-- WebDAV 配置页：浅色主题（用户要求浅色，保证输入可见） -->
+    <style name="Theme.EpubReader.WebDav" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowBackground">@color/webdav_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
 </resources>

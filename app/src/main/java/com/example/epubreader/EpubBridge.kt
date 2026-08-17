@@ -1,6 +1,8 @@
 package com.example.epubreader
 
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import org.json.JSONArray
@@ -15,11 +17,29 @@ class EpubBridge(
     private val activity: MainActivity,
     private val webView: WebView,
     private val store: EpubStore,
+    private val sync: WebDavSync,
     private val launchOpen: () -> Unit,
 ) {
 
     @JavascriptInterface
     fun bridgeVersion(): String = "1.0"
+
+    /** 真实 App 版本号（读安装包的 versionName，供书架标题动态显示，避免硬编码过期） */
+    @JavascriptInterface
+    fun getAppVersion(): String {
+        return try {
+            val pm = activity.packageManager
+            val info = if (Build.VERSION.SDK_INT >= 33) {
+                pm.getPackageInfo(activity.packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(activity.packageName, 0)
+            }
+            info.versionName ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+    }
 
     @JavascriptInterface
     fun importEpub() {
@@ -50,6 +70,12 @@ class EpubBridge(
         }
     }
 
+    /** 删除书籍（原生）：弹原生三选一对话框（是否同时删云端），结果经 callJs("handleBookDeleted") 回调 JS */
+    @JavascriptInterface
+    fun deleteBookFromShelf(name: String) {
+        webView.post { activity.promptDeleteBook(name) }
+    }
+
     @JavascriptInterface
     fun notifyState(state: String) {
         val active = state == "reader"
@@ -60,6 +86,18 @@ class EpubBridge(
     @JavascriptInterface
     fun notifyMenuOpen(open: Boolean) {
         webView.post { activity.menuOpen = open }
+    }
+
+    /** 书架「云同步」按钮：打开原生 WebDAV 配置页 */
+    @JavascriptInterface
+    fun openWebDavConfig() {
+        webView.post { activity.launchWebDavConfig() }
+    }
+
+    /** 查询 WebDAV 同步状态（供 JS 显示按钮状态） */
+    @JavascriptInterface
+    fun getSyncStatus(): String {
+        return sync.getConfig().toString()
     }
 
     /** SAF 选中文件后回调（主线程），导入成功后通知 JS */

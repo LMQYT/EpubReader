@@ -1,17 +1,24 @@
 package com.example.epubreader
 
 import android.annotation.SuppressLint
+import android.app.AlertDialog
+import android.content.Intent
 import android.media.AudioManager
 import android.os.Bundle
+import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.example.epubreader.databinding.ActivityMainBinding
+import org.json.JSONObject
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * 唯一入口：WebView 加载 EPUB 阅读器。
@@ -23,6 +30,7 @@ class MainActivity : AppCompatActivity() {
         /** 通过 WebViewAssetLoader 同源加载 assets 里的阅读器 */
         const val ASSET_READER_URL =
             "https://appassets.androidplatform.net/assets/reader-bookshelf.html"
+        private const val TAG = "MainActivity"
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -30,6 +38,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var bridge: EpubBridge
     private lateinit var immersive: ImmersiveController
     private val store by lazy { EpubStore(this) }
+    private val sync by lazy { WebDavSync(this, store) }
+    private lateinit var syncExecutor: ExecutorService
 
     /** 由 JS 通过 bridge.notifyState 汇报：true=阅读器渲染中，false=书架 */
     var isReaderActive = false
@@ -48,15 +58,29 @@ class MainActivity : AppCompatActivity() {
             if (uri != null) bridge.onImportResult(uri)
         }
 
+    /** WebDAV 配置页：返回后若配置有改动且启用项开了自动同步，则触发一次自动同步 */
+    private val webDavLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == WebDavSettingsActivity.ACTION_SAVE) {
+                // 回到书架先刷新云同步按钮的配置名（切换配置即时生效，不等重启）
+                webView.post { evalJs("window.applyWebDavButtonName && window.applyWebDavButtonName()") }
+                if (sync.getAutoSync()) {
+                    runSync(WebDavSync.Mode.AUTO)
+                }
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         volumeControlStream = AudioManager.STREAM_MUSIC
+        SyncCoordinator.host = this
 
         webView = binding.webView
         immersive = ImmersiveController(this, binding.root)
-        bridge = EpubBridge(this, webView, store) {
+        syncExecutor = Executors.newSingleThreadExecutor()
+        bridge = EpubBridge(this, webView, store, sync) {
             openDocLauncher.launch(arrayOf("*/*"))
         }
 
@@ -85,7 +109,7 @@ class MainActivity : AppCompatActivity() {
             cacheMode = WebSettings.LOAD_NO_CACHE // 强制加载最新 assets，避免缓存旧版 HTML
         }
         webView.clearCache(true) // 清除 WebView 缓存，确保读取最新文件
-        webView.webViewClient = EpubWebViewClient(this, store)
+        webView.webViewClient = EpubWebViewClient(this, store) { autoSyncOnLoad() }
         webView.webChromeClient = EpubWebChromeClient(this)
         webView.setBackgroundColor(0xFF1A1A1A.toInt())
         webView.addJavascriptInterface(bridge, "AndroidBridge")
@@ -98,8 +122,8 @@ class MainActivity : AppCompatActivity() {
         GestureController(
             context = this,
             webView = webView,
-            onFlingLeft = { if (isReaderActive && !menuOpen) evalJs("window.nextPage && window.nextPage()") },
-            onFlingRight = { if (isReaderActive && !menuOpen) evalJs("window.prevPage && window.prevPage()") },
+            onSwipeLeft = { if (isReaderActive && !menuOpen) evalJs("window.nextPage && window.nextPage()") },
+            onSwipeRight = { if (isReaderActive && !menuOpen) evalJs("window.prevPage && window.prevPage()") },
             onEdgeTapLeft = { x, y ->
                 if (isReaderActive) handleTap(x, y) { evalJs("window.prevPage && window.prevPage()") }
             },
@@ -159,6 +183,160 @@ class MainActivity : AppCompatActivity() {
         currentWebUrl = ASSET_READER_URL
         immersive.enterImmersive()
         webView.loadUrl(ASSET_READER_URL)
+    }
+
+    // ---------- WebDAV 云同步 ----------
+
+    /** 打开 WebDAV 配置页 */
+    fun launchWebDavConfig() {
+        webDavLauncher.launch(Intent(this, WebDavSettingsActivity::class.java))
+    }
+
+    /** 页面首载完成：尊重自动同步开关，只触发一次 */
+    private var autoSyncTriggered = false
+
+    private fun autoSyncOnLoad() {
+        if (autoSyncTriggered) return
+        autoSyncTriggered = true
+        if (!sync.isConfigured() || !sync.getAutoSync()) return
+        runSync(WebDavSync.Mode.AUTO)
+    }
+
+    /** 按模式执行同步（书籍后台，进度经 JS 收集后交换）。结果同时报给配置页状态行（SyncCoordinator）。 */
+    internal fun runSync(mode: WebDavSync.Mode) {
+        if (!sync.isConfigured()) {
+            val msg = "未启用任何云同步配置，请先启用一个"
+            SyncCoordinator.report("done", msg)
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            return
+        }
+        SyncCoordinator.report("running", when (mode) {
+            WebDavSync.Mode.UPLOAD_ALL -> "正在覆盖上传…"
+            WebDavSync.Mode.DOWNLOAD_ALL -> "正在云端下载…"
+            WebDavSync.Mode.AUTO -> "正在自动同步…"
+        })
+        syncExecutor.execute {
+            val result = sync.syncBooks(mode)
+            val summary = syncSummary(mode, result)
+            // 结果反馈：原生 Toast + 配置页状态行（双保险，不依赖网页 DOM）
+            webView.post {
+                if (summary != null) {
+                    SyncCoordinator.report("done", summary)
+                    Toast.makeText(this, summary, Toast.LENGTH_LONG).show()
+                }
+                // 主线程：刷新书架（下载可能新增/覆盖书）
+                evalJs("window.refreshShelfFromSync && window.refreshShelfFromSync()")
+                // 收集本地进度 JSON（JS 返回值即 JSON 对象字符串）
+                webView.evaluateJavascript(
+                    "window.collectSyncData ? window.collectSyncData() : '{}'"
+                ) { collected ->
+                    val progressJson = collected ?: "{}"
+                    syncExecutor.execute {
+                        when (mode) {
+                            WebDavSync.Mode.UPLOAD_ALL -> sync.uploadProgress(progressJson)
+                            WebDavSync.Mode.DOWNLOAD_ALL ->
+                                applyRemoteProgress(overwrite = true)
+                            WebDavSync.Mode.AUTO -> {
+                                // 自动同步合并上传：保住云端已有进度/封面，防止空快照冲掉
+                                sync.uploadProgressMerged(progressJson)
+                                applyRemoteProgress(overwrite = false)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** 下载云端 progress.json 并交给 JS 应用 */
+    private fun applyRemoteProgress(overwrite: Boolean) {
+        val remote = sync.downloadProgress()
+        if (remote != null) {
+            webView.post { callJs("applySyncData", remote, overwrite) }
+        }
+    }
+
+    // ---------------- 删除书籍（含云端） ----------------
+
+    /**
+     * 删除书籍（由 JS 书架点击触发）：该书在云端有记录时弹三选一（取消/仅删本地/同时删云端），
+     * 没同步过的本地书弹二选一（取消/删除）。删完经 callJs("handleBookDeleted") 让 JS 清理并刷新书架。
+     */
+    fun promptDeleteBook(name: String) {
+        val hasCloud = sync.hasCloudCopy(name)
+        val builder = AlertDialog.Builder(this)
+            .setTitle("删除书籍")
+            .setMessage("确定删除「$name」吗？")
+            .setNegativeButton("取消", null)
+        if (hasCloud) {
+            builder
+                .setMessage("确定删除「$name」吗？\n该书已同步到云端，可一并删除云端文件与记录。")
+                .setPositiveButton("同时删云端") { _, _ -> performDelete(name, true) }
+                .setNeutralButton("仅删本地") { _, _ -> performDelete(name, false) }
+        } else {
+            builder.setPositiveButton("删除") { _, _ -> performDelete(name, false) }
+        }
+        builder.show()
+    }
+
+    private fun performDelete(name: String, deleteCloud: Boolean) {
+        val localOk = try {
+            store.delete(name)
+        } catch (e: Exception) {
+            Log.e(TAG, "delete local $name failed", e)
+            false
+        }
+        if (!localOk) {
+            Toast.makeText(this, "本地文件删除失败", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // 云端删除后台执行，完成后 Toast 结果（不阻塞书架刷新）
+        if (deleteCloud) {
+            syncExecutor.execute {
+                val err = sync.deleteCloudBook(name)
+                webView.post {
+                    Toast.makeText(
+                        this,
+                        if (err == null) "已同时删除云端文件与记录" else "云端删除失败：$err",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+        // 通知 JS 清理 localStorage 进度/封面并刷新书架
+        callJs(
+            "handleBookDeleted",
+            JSONObject().apply { put("name", name) }.toString()
+        )
+    }
+
+    /**
+     * 同步结果的文案。手动操作（覆盖上传/云端下载）任何时候都明确给出结果；
+     * 自动同步仅在出错或有实际变化时返回文案，已是最新返回 null（不打扰）。
+     * 同时供 Toast 与配置页状态行使用。
+     */
+    private fun syncSummary(mode: WebDavSync.Mode, r: WebDavSync.SyncResult): String? {
+        return when {
+            r.error != null -> "☁️ ${r.error}"
+            mode == WebDavSync.Mode.UPLOAD_ALL ->
+                if (r.uploaded > 0) "☁️ 覆盖上传完成：上传 ${r.uploaded} 本 · 跳过 ${r.skippedUpload} 本（云端已一致）"
+                else if (r.skippedUpload > 0) "☁️ 覆盖上传完成：全部 ${r.skippedUpload} 本已在云端，无需重复上传"
+                else "☁️ 覆盖上传完成：本地书架为空，没有可上传的书"
+            mode == WebDavSync.Mode.DOWNLOAD_ALL ->
+                if (r.downloaded > 0) "☁️ 云端下载完成：下载 ${r.downloaded} 本 · 跳过 ${r.skippedDownload} 本（本地已一致）"
+                else if (r.skippedDownload > 0) "☁️ 云端下载完成：全部 ${r.skippedDownload} 本已在本地，无需重复下载"
+                else "☁️ 云端下载完成：云端没有新书"
+            else -> // AUTO
+                if (r.uploaded > 0 || r.downloaded > 0)
+                    "☁️ 自动同步完成：上传 ${r.uploaded} · 下载 ${r.downloaded}"
+                else null
+        }
+    }
+
+    /** 通用 callJs：首参为 JSON 字符串原样嵌入，后续参数按原样 */
+    private fun callJs(fn: String, vararg args: Any) {
+        val argStr = args.joinToString(",") { a -> a.toString() }
+        webView.evaluateJavascript("window.$fn && window.$fn($argStr)", null)
     }
 
     // ---------- 阅读状态（由 JS 通过 bridge 汇报） ----------
@@ -236,6 +414,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         immersive.cancelAutoHide()
+        SyncCoordinator.host = null
+        if (::syncExecutor.isInitialized) syncExecutor.shutdown()
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.destroy()
         super.onDestroy()

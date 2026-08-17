@@ -21,6 +21,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".WebDavSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.EpubReader.WebDav"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize" />
     </application>
 
 </manifest>
